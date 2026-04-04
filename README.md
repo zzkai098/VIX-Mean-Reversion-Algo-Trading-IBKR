@@ -1,6 +1,6 @@
 # VIX Mean Reversion Algo Trading (IBKR)
 
-A fully automated VIX futures mean-reversion trading system with live execution via Interactive Brokers API. Built for the MF821 Algorithmic & HFT Trading course (Boston University, Spring 2026).
+A fully automated VIX futures mean-reversion trading system with live execution via Interactive Brokers API. 
 
 ## Architecture
 
