@@ -543,10 +543,14 @@ class VIXSignalEngine:
                     return {'signal': 'NO_SIGNAL', 'z_score': current_z, 'vix_spot': vix_spot,
                             'regime_ok': True, 'reason': f'basis_backwardation ({basis:+.2f})'}
             elif signal == 'LONG' and basis >= 0:
-                if verbose:
-                    print(f"Basis BLOCKED: VX1 in contango (basis={basis:+.2f}), contango hurts longs")
-                return {'signal': 'NO_SIGNAL', 'z_score': current_z, 'vix_spot': vix_spot,
-                        'regime_ok': True, 'reason': f'basis_contango ({basis:+.2f})'}
+                if current_z < Z_CONTANGO_OVERRIDE:
+                    if verbose:
+                        print(f"Basis OVERRIDE: Z={current_z:.2f} < {Z_CONTANGO_OVERRIDE}, ignoring contango (basis={basis:+.2f})")
+                else:
+                    if verbose:
+                        print(f"Basis BLOCKED: VX1 in contango (basis={basis:+.2f}), Z={current_z:.2f} not extreme enough (need <{Z_CONTANGO_OVERRIDE})")
+                    return {'signal': 'NO_SIGNAL', 'z_score': current_z, 'vix_spot': vix_spot,
+                            'regime_ok': True, 'reason': f'basis_contango ({basis:+.2f})'}
 
         # Regime filter — only blocks LONG entries (shorting high VIX is fine)
         if signal == 'LONG' and vix_spot >= VIX_REGIME_THRESHOLD:

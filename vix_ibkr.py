@@ -1,8 +1,13 @@
-"""
-IBKR API wrapper and utilities for the Long-Short Leveraged Rotation strategy.
-contains:
-- IBKR class: Connects to IB, fetches data, places orders, and monitors PnL and some account info.
-- Visualizer class: Utility for printing positions and live PnL in a readable format.
+"""Interactive Brokers API wrapper for the VIX mean-reversion strategy.
+
+Everything that talks to TWS/IB Gateway lives here, so the strategy engine in
+vix_strategy.py can stay broker-agnostic and testable. Connection details come
+from vix_config (IB_HOST / IB_PORT / IB_ACCOUNT).
+
+Contains:
+    IBKR        Connect to TWS or IB Gateway, resolve contracts, pull market data
+                and account state, place orders, and subscribe to live P&L.
+    Visualizer  Format positions and live P&L for the terminal.
 """
 import math
 import pandas as pd 
@@ -11,7 +16,14 @@ from ib_async import *
 from vix_config import *
 from datetime import datetime
 
-class IBKR(object):    
+class IBKR(object):
+    """Thin wrapper around `ib_async.IB` holding one connection and its account.
+
+    Construct, then `connect(client_id)` before any other call — the account id is
+    resolved on connect and cached. `_active_pnls` tracks live P&L subscriptions so
+    they can be reused rather than re-requested per poll.
+    """
+
     def __init__(self):
         self.ib = IB()
         self.account = None
@@ -189,7 +201,13 @@ class IBKR(object):
             self.account = None
  
 
-class Visualizer(object):    
+class Visualizer(object):
+    """Terminal formatting for positions and live P&L.
+
+    Display only — it never touches the broker connection, so changing how output
+    looks cannot affect trading behaviour.
+    """
+
     def __init__(self, float_format: str = "{:.2f}"):
         self.float_format = float_format
     
