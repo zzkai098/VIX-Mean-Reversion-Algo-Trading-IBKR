@@ -18,10 +18,9 @@ survives a restart without losing its position state.
 
 ## Contents
 
-[Performance](#performance) · [Strategy](#strategy) ·
-[Architecture](#architecture) · [Parameter selection](#parameter-selection) ·
-[Limitations](#limitations) · [Deployment](#deployment) ·
-[Configuration](#configuration) · [Layout](#layout)
+[Performance](#performance) · [Strategy](#strategy) · [Architecture](#architecture) · [Live system](#live-system) ·
+[Parameter selection](#parameter-selection) · [Deployment](#deployment) · [Configuration](#configuration) ·
+[Layout](#layout) · [Limitations](#limitations)
 
 ---
 
@@ -95,114 +94,6 @@ regime-triggered forced exit.
 
 **Sizing.** Z-score tiered — a larger dislocation gets a larger clip, up to
 `MAX_CONTRACTS` — with optional pyramiding as a position extends further.
-
----
-
-## Parameter selection
-
-`vix_backtest.py` is a **parameter-search engine**, separate from the performance
-study above. Its job is to rank signal parameters against one another, not to
-simulate P&L: it has no transaction-cost model and no equity floor, so its ratio
-metrics are not comparable to the Performance table. The statistics reported in
-this section are therefore limited to **trade win rate** and **trades per window** —
-both computed from realised trade P&L signs and counts, so neither depends on the
-account equity path.
-
-The grid is `3 × 3 × 3 × 3 × 3 × 3 × 3 × 2 = 4,374` rows, but `slope_lookback` is
-unreachable when `slope_confirmation` is `False`, so those rows are exact
-triplicates: **2,916 distinct parameter sets**. Each was scored across **216
-overlapping 102-day windows** — a 42-day step with a 60-day lead-in — spanning
-CBOE VIX spot from 1990-01-02 to 2026-03-20.
-
-### One boolean splits the entire search
-
-![win rate split by the slope filter](docs/img/slope_filter_split.png)
-
-`slope_confirmation` dominates every numeric parameter combined. Requiring the
-short-horizon VIX slope to agree with the reversion direction raises selectivity
-sharply but suppresses most entries; the shipped configuration leaves it off.
-
-### Selectivity costs frequency
-
-![win rate versus trade frequency](docs/img/winrate_vs_frequency.png)
-
-The two clusters are the same trade-off seen from the other side: filters that lift
-win rate do so by refusing trades. There is no corner of this grid that gets both.
-
-### Sensitivity to the two structural parameters
-
-![win rate by lookback and holding period](docs/img/winrate_sensitivity.png)
-
-Within the shipped regime, win rate rises with the z-score lookback and falls
-slightly as the holding period lengthens. The best cell — a 20-day lookback with a
-3-day maximum hold, at 56.7% — is the shipped configuration.
-
-Regenerate all three with `python make_figures.py grid_results.csv`.
-
-### Selected parameters
-
-| Parameter | Value | Why |
-|---|---|---|
-| `Z_LOOKBACK` | 20 | Highest win rate of the three lookbacks tested, at every holding period |
-| `Z_ENTRY_SHORT` | 0.75 | Most conservative short threshold in the grid; short-vol tail risk is one-sided |
-| `Z_ENTRY_LONG` | 1.0 | Higher bar for longs; VIX's right skew makes downside dislocations less reliable |
-| `Z_EXIT` | 0.3 | **Backtest only** — the live system exits through `PROFIT_TAKE_TIERS` and never reads this |
-| `Z_STOP` | 2.5 | The widest stop tested. A mean-reversion entry is already against the recent move, so a tight stop mostly harvests noise before the reversion arrives |
-| `MAX_HOLD_DAYS` | 3 | Best win rate at a 20-day lookback, and the fastest turnover of the three |
-| `SLOPE_CONFIRMATION` | False | On, it suppresses most entries — see the first figure |
-
-⚠️ **Re-running `python vix_backtest.py` will not reproduce the grid above.** The
-committed `main()` slices the data to `2020-01-01` onward and uses a 21-day window,
-producing 72 windows rather than 216, and ranks by average return rather than by
-any risk-adjusted measure ("Competition Mode"). The 216-window configuration used
-for `grid_results.csv` was a one-off edit that is not in this repository.
-
----
-
-## Limitations
-
-Stated plainly and at length, because they bound what this code can and cannot show.
-
-1. **`vix_backtest.py` has no equity floor.** `_compute_metrics` runs
-   `pct_change()` and peak-relative drawdown over an equity series that is allowed
-   to go below zero, and roughly half the grid does exactly that. Once equity
-   crosses zero the sign of a return flips, so Sharpe, Calmar and drawdown computed
-   *by this engine* stop meaning anything — which is why the parameter-selection
-   section reports only win rate and trade counts. It does not affect the
-   Performance table, which comes from a different analysis. Fixing it needs a hard
-   stop at zero equity and a re-run.
-
-2. **The backtest trades VIX spot as a proxy for the front-month future.** A long
-   VX1 price history is not freely available; `VIX_History.csv` is CBOE spot. Spot
-   and VX1 are highly correlated, but the proxy cannot capture roll yield or the
-   basis — precisely where a short-vol strategy earns much of its return.
-
-3. **Windows overlap and the lead-in is traded.** Each window spans 102 trading
-   days and steps forward 42, so consecutive windows share 60 days, and `run()`
-   begins trading from day `z_lookback` rather than at the end of the lead-in.
-   Every trade is therefore counted in roughly three windows. Any per-window
-   statistic describes about five months of trading, not two.
-
-4. **Selection is in-sample.** `rolling_optimize` scores each combination on all
-   216 windows and the winner is chosen on that same average. There is no
-   out-of-sample holdout and no walk-forward step, so the selected parameters carry
-   an unmeasured amount of selection bias.
-
-5. **No transaction costs in the search engine.** Commissions and slippage are not
-   modelled anywhere in `vix_backtest.py`. The Performance table at the top does
-   include them, because it comes from the separate study — but that study's code
-   is not in this repository, so those numbers cannot be regenerated from here.
-
-6. **The backtest is a different strategy from the live system.** What the grid
-   actually tests is the z-score entry, a single `Z_EXIT` threshold, the absolute
-   and daily loss stops, the max-hold cap and the VIX-level regime filter. Absent
-   from it: the VX1−VIX basis filter and both of its overrides, the dual-lookback
-   regime-shift detector, the graduated `PROFIT_TAKE_TIERS` ladder, volume
-   confirmation, news sentiment, and pyramiding. The live risk caps are also
-   tighter than the backtest's (4% / 5% per trade and per day, against 3% / 8%).
-
-7. **Paper account.** Everything shipped points at IBKR paper. The system has not
-   been run against real money.
 
 ---
 
@@ -323,6 +214,67 @@ session is open — so entries are not confined to the afternoon check.
 
 ---
 
+## Parameter selection
+
+`vix_backtest.py` is a **parameter-search engine**, separate from the performance
+study above. Its job is to rank signal parameters against one another, not to
+simulate P&L: it has no transaction-cost model and no equity floor, so its ratio
+metrics are not comparable to the Performance table. The statistics reported in
+this section are therefore limited to **trade win rate** and **trades per window** —
+both computed from realised trade P&L signs and counts, so neither depends on the
+account equity path.
+
+The grid is `3 × 3 × 3 × 3 × 3 × 3 × 3 × 2 = 4,374` rows, but `slope_lookback` is
+unreachable when `slope_confirmation` is `False`, so those rows are exact
+triplicates: **2,916 distinct parameter sets**. Each was scored across **216
+overlapping 102-day windows** — a 42-day step with a 60-day lead-in — spanning
+CBOE VIX spot from 1990-01-02 to 2026-03-20.
+
+### One boolean splits the entire search
+
+![win rate split by the slope filter](docs/img/slope_filter_split.png)
+
+`slope_confirmation` dominates every numeric parameter combined. Requiring the
+short-horizon VIX slope to agree with the reversion direction raises selectivity
+sharply but suppresses most entries; the shipped configuration leaves it off.
+
+### Selectivity costs frequency
+
+![win rate versus trade frequency](docs/img/winrate_vs_frequency.png)
+
+The two clusters are the same trade-off seen from the other side: filters that lift
+win rate do so by refusing trades. There is no corner of this grid that gets both.
+
+### Sensitivity to the two structural parameters
+
+![win rate by lookback and holding period](docs/img/winrate_sensitivity.png)
+
+Within the shipped regime, win rate rises with the z-score lookback and falls
+slightly as the holding period lengthens. The best cell — a 20-day lookback with a
+3-day maximum hold, at 56.7% — is the shipped configuration.
+
+Regenerate all three with `python make_figures.py grid_results.csv`.
+
+### Selected parameters
+
+| Parameter | Value | Why |
+|---|---|---|
+| `Z_LOOKBACK` | 20 | Highest win rate of the three lookbacks tested, at every holding period |
+| `Z_ENTRY_SHORT` | 0.75 | Most conservative short threshold in the grid; short-vol tail risk is one-sided |
+| `Z_ENTRY_LONG` | 1.0 | Higher bar for longs; VIX's right skew makes downside dislocations less reliable |
+| `Z_EXIT` | 0.3 | **Backtest only** — the live system exits through `PROFIT_TAKE_TIERS` and never reads this |
+| `Z_STOP` | 2.5 | The widest stop tested. A mean-reversion entry is already against the recent move, so a tight stop mostly harvests noise before the reversion arrives |
+| `MAX_HOLD_DAYS` | 3 | Best win rate at a 20-day lookback, and the fastest turnover of the three |
+| `SLOPE_CONFIRMATION` | False | On, it suppresses most entries — see the first figure |
+
+⚠️ **Re-running `python vix_backtest.py` will not reproduce the grid above.** The
+committed `main()` slices the data to `2020-01-01` onward and uses a 21-day window,
+producing 72 windows rather than 216, and ranks by average return rather than by
+any risk-adjusted measure ("Competition Mode"). The 216-window configuration used
+for `grid_results.csv` was a one-off edit that is not in this repository.
+
+---
+
 ## Deployment
 
 **1. Install.**
@@ -398,6 +350,53 @@ vix_spot_history.csv    VIX spot cache written by the live data engine
 docs/img/               figures used in this README
 archive/                earlier research notebooks (vix_v0, vix_v1)
 ```
+
+---
+
+## Limitations
+
+Stated plainly and at length, because they bound what this code can and cannot show.
+
+1. **`vix_backtest.py` has no equity floor.** `_compute_metrics` runs
+   `pct_change()` and peak-relative drawdown over an equity series that is allowed
+   to go below zero, and roughly half the grid does exactly that. Once equity
+   crosses zero the sign of a return flips, so Sharpe, Calmar and drawdown computed
+   *by this engine* stop meaning anything — which is why the parameter-selection
+   section reports only win rate and trade counts. It does not affect the
+   Performance table, which comes from a different analysis. Fixing it needs a hard
+   stop at zero equity and a re-run.
+
+2. **The backtest trades VIX spot as a proxy for the front-month future.** A long
+   VX1 price history is not freely available; `VIX_History.csv` is CBOE spot. Spot
+   and VX1 are highly correlated, but the proxy cannot capture roll yield or the
+   basis — precisely where a short-vol strategy earns much of its return.
+
+3. **Windows overlap and the lead-in is traded.** Each window spans 102 trading
+   days and steps forward 42, so consecutive windows share 60 days, and `run()`
+   begins trading from day `z_lookback` rather than at the end of the lead-in.
+   Every trade is therefore counted in roughly three windows. Any per-window
+   statistic describes about five months of trading, not two.
+
+4. **Selection is in-sample.** `rolling_optimize` scores each combination on all
+   216 windows and the winner is chosen on that same average. There is no
+   out-of-sample holdout and no walk-forward step, so the selected parameters carry
+   an unmeasured amount of selection bias.
+
+5. **No transaction costs in the search engine.** Commissions and slippage are not
+   modelled anywhere in `vix_backtest.py`. The Performance table at the top does
+   include them, because it comes from the separate study — but that study's code
+   is not in this repository, so those numbers cannot be regenerated from here.
+
+6. **The backtest is a different strategy from the live system.** What the grid
+   actually tests is the z-score entry, a single `Z_EXIT` threshold, the absolute
+   and daily loss stops, the max-hold cap and the VIX-level regime filter. Absent
+   from it: the VX1−VIX basis filter and both of its overrides, the dual-lookback
+   regime-shift detector, the graduated `PROFIT_TAKE_TIERS` ladder, volume
+   confirmation, news sentiment, and pyramiding. The live risk caps are also
+   tighter than the backtest's (4% / 5% per trade and per day, against 3% / 8%).
+
+7. **Paper account.** Everything shipped points at IBKR paper. The system has not
+   been run against real money.
 
 ---
 

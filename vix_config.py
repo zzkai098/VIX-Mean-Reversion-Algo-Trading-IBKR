@@ -16,7 +16,8 @@
 # A real row of the grid, not a hand-mixed set. Selected on trade win rate and
 # turnover, the only statistics the search engine computes reliably: it has no
 # equity floor, so Sharpe and drawdown are not usable (see README Limitations).
-# This row wins its lookback/hold cell at 56.7% average trade win rate.
+# This row scores a 58.0% average trade win rate over the 216 windows, against a
+# 54.3% median across the 729 sets sharing its slope_confirmation setting.
 Z_LOOKBACK = 20          # Rolling window for the VIX-spot z-score (trading days).
                          # 20d beat 10d/15d on Sharpe: a slower baseline treats a
                          # volatility spike as a genuine outlier instead of quickly
