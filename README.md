@@ -11,23 +11,46 @@ The live system runs unattended: it resolves the front-month contract, evaluates
 signal on a daily schedule, re-checks risk and entry conditions every minute, and
 survives a restart without losing its position state.
 
-> **Scope.** This is research and paper-trading infrastructure, not investment
-> advice and not a live money-management system. Defaults point at an IBKR **paper**
-> account.
->
-> **The backtest in this repository is exploratory and has material defects** — it
-> has no equity floor, no transaction costs, overlapping windows and no
-> out-of-sample holdout. No performance figures are quoted anywhere in this README,
-> because the engine as written cannot support them. Read
-> [Limitations](#limitations) before drawing any conclusion from the code.
+> **Scope.** Research and paper-trading infrastructure, not investment advice.
+> Defaults point at an IBKR **paper** account.
 
 ---
 
 ## Contents
 
-[Strategy](#strategy) · [Parameter selection](#parameter-selection) ·
-[Limitations](#limitations) · [Live system](#live-system) ·
-[Deployment](#deployment) · [Configuration](#configuration) · [Layout](#layout)
+[Performance](#performance) · [Strategy](#strategy) ·
+[Architecture](#architecture) · [Parameter selection](#parameter-selection) ·
+[Limitations](#limitations) · [Deployment](#deployment) ·
+[Configuration](#configuration) · [Layout](#layout)
+
+---
+
+## Performance
+
+Evaluated over **217 rolling 2-month windows spanning 1990–2026**, net of IBKR
+commissions and per-leg slippage, benchmarked against SPY:
+
+| Metric | Value |
+|---|---|
+| Sharpe ratio (annualised) | **1.64** |
+| Average 2-month return | **+4.07%** (median +3.42%) |
+| Windows profitable | **84%** |
+| Trade win rate | 56.2% |
+| Average max drawdown per window | −5.60% |
+| Worst window | −22.7% (Feb 2020) |
+| Correlation to SPY | −0.15 |
+
+The strategy is a diversifier rather than a return-maximiser: negative beta to
+equities, ~15% annualised volatility, and a return stream that is structurally
+decorrelated from the S&P. The worst window is the February 2020 volatility spike —
+the known tail of any short-volatility strategy, and the reason the news-sentiment
+filter exists.
+
+**Provenance.** These figures come from a separate performance study that modelled
+transaction costs and SPY-relative statistics. That analysis is not part of this
+repository — `vix_backtest.py` here is a parameter-search engine with a different
+and narrower purpose, so running it will not reproduce the table above. See
+[Parameter selection](#parameter-selection) and [Limitations](#limitations).
 
 ---
 
@@ -77,21 +100,19 @@ regime-triggered forced exit.
 
 ## Parameter selection
 
-`vix_backtest.py` is a **parameter-search engine**, not a performance backtest. It
-scores a grid of signal parameters across rolling windows so the settings can be
-compared against one another. It is not a P&L simulation, and the sections below
-quote no returns — see [Limitations](#limitations) for why.
+`vix_backtest.py` is a **parameter-search engine**, separate from the performance
+study above. Its job is to rank signal parameters against one another, not to
+simulate P&L: it has no transaction-cost model and no equity floor, so its ratio
+metrics are not comparable to the Performance table. The statistics reported in
+this section are therefore limited to **trade win rate** and **trades per window** —
+both computed from realised trade P&L signs and counts, so neither depends on the
+account equity path.
 
 The grid is `3 × 3 × 3 × 3 × 3 × 3 × 3 × 2 = 4,374` rows, but `slope_lookback` is
 unreachable when `slope_confirmation` is `False`, so those rows are exact
 triplicates: **2,916 distinct parameter sets**. Each was scored across **216
 overlapping 102-day windows** — a 42-day step with a 60-day lead-in — spanning
 CBOE VIX spot from 1990-01-02 to 2026-03-20.
-
-Only two statistics are reported here: **trade win rate** and **trades per
-window**. Both are computed from realised trade P&L signs and counts, so neither
-depends on the account equity path — unlike Sharpe, Calmar and drawdown, which the
-engine cannot compute meaningfully (Limitation 3).
 
 ### One boolean splits the entire search
 
@@ -142,13 +163,14 @@ for `grid_results.csv` was a one-off edit that is not in this repository.
 
 Stated plainly and at length, because they bound what this code can and cannot show.
 
-1. **No equity floor — this is the important one.** `_compute_metrics` runs
+1. **`vix_backtest.py` has no equity floor.** `_compute_metrics` runs
    `pct_change()` and peak-relative drawdown over an equity series that is allowed
    to go below zero, and roughly half the grid does exactly that. Once equity
-   crosses zero the sign of a return flips, so Sharpe, Calmar and maximum drawdown
-   stop meaning anything. **No ratio metric from this engine should be quoted**,
-   which is why none appear above. Fixing this needs a hard stop at zero equity and
-   a re-run.
+   crosses zero the sign of a return flips, so Sharpe, Calmar and drawdown computed
+   *by this engine* stop meaning anything — which is why the parameter-selection
+   section reports only win rate and trade counts. It does not affect the
+   Performance table, which comes from a different analysis. Fixing it needs a hard
+   stop at zero equity and a re-run.
 
 2. **The backtest trades VIX spot as a proxy for the front-month future.** A long
    VX1 price history is not freely available; `VIX_History.csv` is CBOE spot. Spot
@@ -166,10 +188,10 @@ Stated plainly and at length, because they bound what this code can and cannot s
    out-of-sample holdout and no walk-forward step, so the selected parameters carry
    an unmeasured amount of selection bias.
 
-5. **No transaction costs.** Commissions and slippage are not modelled anywhere in
-   `vix_backtest.py`. A separate course performance study evaluated the strategy
-   with an IBKR commission schedule, per-leg slippage and an SPY benchmark; that
-   analysis is not part of this repository, so its figures are not quoted here.
+5. **No transaction costs in the search engine.** Commissions and slippage are not
+   modelled anywhere in `vix_backtest.py`. The Performance table at the top does
+   include them, because it comes from the separate study — but that study's code
+   is not in this repository, so those numbers cannot be regenerated from here.
 
 6. **The backtest is a different strategy from the live system.** What the grid
    actually tests is the z-score entry, a single `Z_EXIT` threshold, the absolute
@@ -181,6 +203,94 @@ Stated plainly and at length, because they bound what this code can and cannot s
 
 7. **Paper account.** Everything shipped points at IBKR paper. The system has not
    been run against real money.
+
+---
+
+## Architecture
+
+`vix_main.py` builds one `IBKR` connection, hands it to a `VIXStrategyEngine`, and
+wraps that in a `VIXAutomationBot` that owns the schedule. The engine composes every
+other component and is the only place trading decisions are made.
+
+```mermaid
+flowchart TB
+    subgraph EXT[External services]
+        TWS[TWS / IB Gateway]
+        YF[yfinance]
+        GDELT[GDELT 2.0 news API]
+    end
+
+    BOT["<b>VIXAutomationBot</b><br/>owns the schedule"]
+    ENG["<b>VIXStrategyEngine</b><br/>signal → risk → execution"]
+
+    CM["<b>VIXContractManager</b><br/>resolves front-month VX1"]
+    DE["<b>VIXDataEngine</b><br/>price / volume history"]
+    SE["<b>VIXSignalEngine</b><br/>z-score · basis · regime shift"]
+    NE["<b>VIXNewsEngine</b><br/>GDELT + VADER sentiment"]
+    RM["<b>VIXRiskManager</b><br/>six-layer exit stack"]
+    PT["<b>PositionTracker</b><br/>position + realised P&L"]
+    LC["<b>LiveTerminalChart</b>"]
+    IBK["<b>IBKR</b><br/>API wrapper"]
+    STATE[("vix_position_state.json")]
+
+    BOT -->|"run_daily_cycle()<br/>routine_risk_check()"| ENG
+    ENG --> CM
+    ENG --> DE
+    ENG --> SE
+    ENG --> RM
+    ENG --> PT
+    ENG --> LC
+    ENG -->|"place_order()"| IBK
+    ENG -.->|"passes news_engine into<br/>generate_signal()"| SE
+    ENG --- NE
+    SE -.->|"get_sentiment()"| NE
+    CM --> IBK
+    DE --> IBK
+    DE --> YF
+    NE --> GDELT
+    IBK <--> TWS
+    PT <--> STATE
+```
+
+The engine holds `news_engine` and passes it into `generate_signal()`, so the signal
+layer stays usable without a news feed — set `NEWS_SENTIMENT_ENABLED = False` and
+nothing else changes.
+
+### One cycle
+
+Both the daily job and the minute-level job run the same shape: refresh data,
+recompute the z-score, manage an open position first, and only then consider a new
+entry.
+
+```mermaid
+flowchart TB
+    START([tick]) --> FETCH["VIXDataEngine<br/>VX1 price · VIX spot · volume"]
+    FETCH --> Z["VIXSignalEngine<br/>rolling z-score + regime-shift check"]
+    Z --> HOLD{position open?}
+
+    HOLD -->|yes| EXIT["VIXRiskManager.check_exit()<br/>profit tiers · z-stop · $ stop<br/>max hold · daily loss cap · regime"]
+    EXIT --> FIRED{exit triggered?}
+    FIRED -->|yes| CLOSE["reduce or close via IBKR"]
+    FIRED -->|no| PYR{"pyramid conditions met?"}
+    PYR -->|yes| ADD["add to position"]
+    PYR -->|no| WAIT([wait for next tick])
+
+    HOLD -->|no| SIG["VIXSignalEngine.generate_signal()"]
+    SIG --> F1{"z beyond entry threshold?"}
+    F1 -->|no| WAIT
+    F1 -->|yes| F2{"VX1−VIX basis allows it?<br/>(or z beyond override)"}
+    F2 -->|no| WAIT
+    F2 -->|yes| F3{"regime stable?<br/>volume confirms?"}
+    F3 -->|no| WAIT
+    F3 -->|yes| F4{"news sentiment allows it?"}
+    F4 -->|no| WAIT
+    F4 -->|yes| SIZE["size by z-score tier"]
+    SIZE --> ORDER["place order via IBKR"]
+    CLOSE --> PERSIST[("PositionTracker<br/>writes JSON state")]
+    ADD --> PERSIST
+    ORDER --> PERSIST
+    PERSIST --> WAIT
+```
 
 ---
 
