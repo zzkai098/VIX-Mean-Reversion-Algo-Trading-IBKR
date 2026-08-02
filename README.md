@@ -30,12 +30,14 @@ survives a restart without losing its position state.
 **Base signal — z-score mean reversion.** Compute `z = (VIX − μ) / σ` over a
 20-day rolling window of VIX spot.
 
-- **Short VX1** when `z ≥ 0.3` — VIX is unusually high and tends to fall back.
+- **Short VX1** when `z ≥ 1.0` — VIX is unusually high and tends to fall back.
 - **Long VX1** when `z ≤ −1.0` — VIX is unusually low.
 
-The thresholds are deliberately **asymmetric**. VIX is right-skewed: it spikes
-upward and drifts downward, so upside dislocations revert more reliably than
-downside ones and deserve a lower bar.
+The grid search preferred a much lower short threshold (0.3), which trades far more
+often. The shipped default overrides it to 1.0: short-vol strategies collect small
+premiums and lose in large jumps, so a marginal short entry is asymmetric against
+you in a way average-Sharpe scoring does not fully price. This is the one parameter
+deliberately set **outside** the searched range — see the note in the table below.
 
 **Filter A — term structure (VX1 − VIX basis).**
 Deep contango favours short-VIX (roll yield is a tailwind); backwardation
@@ -106,8 +108,8 @@ artefact of one fragile combination.
 | Parameter | Value | Why |
 |---|---|---|
 | `Z_LOOKBACK` | 20 | Beat 10d/15d on Sharpe — a slower baseline treats a spike as an outlier instead of re-centring on it |
-| `Z_ENTRY_SHORT` | 0.3 | Lower bar for shorts; VIX's right skew makes upside dislocations more reliable |
-| `Z_ENTRY_LONG` | 1.0 | Higher bar for longs |
+| `Z_ENTRY_SHORT` | 1.0 | **Manual override, not grid-selected.** The grid tested 0.3 / 0.5 / 0.75 and preferred 0.3; 1.0 sits outside that range and demands a full sigma before selling volatility |
+| `Z_ENTRY_LONG` | 1.0 | Long entries at the same bar, so entries are symmetric as shipped |
 | `Z_EXIT` | 0.3 | Exiting just before the mean beat exiting at it — the last leg of a reversion is the slowest |
 | `Z_STOP` | 2.0 | Stop offset in sigma from entry |
 | `MAX_HOLD_DAYS` | 3 | Short holds dominated the grid |
@@ -151,7 +153,7 @@ Stated plainly, because they bound what the numbers above mean.
 |---|---|
 | `VIXContractManager` | Resolves the VIX futures contract, auto-selecting the front month |
 | `VIXDataEngine` | Dual market-data sources (yfinance + IBKR) with local persistence |
-| `VIXSignalEngine` | Rolling z-score, asymmetric thresholds, regime-shift detection |
+| `VIXSignalEngine` | Rolling z-score, separate long/short entry thresholds, regime-shift detection |
 | `VIXRiskManager` | The six-layer exit stack |
 | `PositionTracker` | Position state persistence and pyramid bookkeeping |
 | `VIXStrategyEngine` | Orchestrates the daily signal → risk → execution workflow |

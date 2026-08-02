@@ -12,15 +12,22 @@
 # but has a far deeper worst-window drawdown (docs/img/objective_tradeoff.png).
 # =============================================================================
 
-# ========= Signal parameters — GRID-SELECTED (rank 1 by average Sharpe) ======
+# ========= Signal parameters — grid-selected, with one override ==============
+# Values below are rank 1 by average Sharpe in the grid search, EXCEPT
+# Z_ENTRY_SHORT, which is deliberately set outside the searched range (see note).
 Z_LOOKBACK = 20          # Rolling window for the VIX-spot z-score (trading days).
                          # 20d beat 10d/15d on Sharpe: a slower baseline treats a
                          # volatility spike as a genuine outlier instead of quickly
                          # re-centring on it.
-Z_ENTRY_SHORT = 0.3      # Short VX1 when z >= this (sigma). Deliberately lower than
-                         # the long threshold: VIX is right-skewed, so upside
-                         # dislocations mean-revert more reliably than downside ones.
-Z_ENTRY_LONG = 1.0       # Long VX1 when z <= -this (sigma).
+Z_ENTRY_SHORT = 1.0      # NOT grid-selected — a deliberate override, and the one
+                         # parameter here set outside the searched range. The grid
+                         # tested 0.3 / 0.5 / 0.75 and preferred 0.3, which trades
+                         # far more often; 1.0 demands a full sigma of dislocation
+                         # before selling volatility. Short-vol pays out in small
+                         # increments and loses in large ones, so the cost of a
+                         # marginal short entry is asymmetric against you.
+Z_ENTRY_LONG = 1.0       # Long VX1 when z <= -this (sigma). Equal to the short
+                         # threshold, so entries are symmetric as configured.
 Z_EXIT = 0.3             # Final exit threshold (sigma). Exiting slightly before the
                          # mean (0.3 rather than 0.0) scored better — the last leg of
                          # the reversion is the slowest and least reliable.
