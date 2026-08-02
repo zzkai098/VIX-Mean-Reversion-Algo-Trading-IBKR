@@ -12,26 +12,33 @@
 # but has a far deeper worst-window drawdown (docs/img/objective_tradeoff.png).
 # =============================================================================
 
-# ========= Signal parameters — grid-selected, with one override ==============
-# Values below are rank 1 by average Sharpe in the grid search, EXCEPT
-# Z_ENTRY_SHORT, which is deliberately set outside the searched range (see note).
+# ========= Signal parameters — GRID-SELECTED =================================
+# This is a real row of the grid, not a hand-mixed set: rank 1 by average Sharpe
+# among all combinations using the most conservative short threshold the search
+# tested (0.75). Its metrics over the 216 windows: Sharpe 2.02, +18.96% average
+# 2-month return, 82.9% of windows profitable, 58.0% trade win rate.
 Z_LOOKBACK = 20          # Rolling window for the VIX-spot z-score (trading days).
                          # 20d beat 10d/15d on Sharpe: a slower baseline treats a
                          # volatility spike as a genuine outlier instead of quickly
                          # re-centring on it.
-Z_ENTRY_SHORT = 1.0      # NOT grid-selected — a deliberate override, and the one
-                         # parameter here set outside the searched range. The grid
-                         # tested 0.3 / 0.5 / 0.75 and preferred 0.3, which trades
-                         # far more often; 1.0 demands a full sigma of dislocation
-                         # before selling volatility. Short-vol pays out in small
-                         # increments and loses in large ones, so the cost of a
-                         # marginal short entry is asymmetric against you.
-Z_ENTRY_LONG = 1.0       # Long VX1 when z <= -this (sigma). Equal to the short
-                         # threshold, so entries are symmetric as configured.
+Z_ENTRY_SHORT = 0.75     # Short VX1 when z >= this (sigma). The grid's outright
+                         # winner used 0.3, which trades ~15% more often for about
+                         # 0.02 more Sharpe — not worth it: short-vol collects small
+                         # premiums and loses in large jumps, so marginal short
+                         # entries carry more tail than the average-Sharpe score
+                         # prices in. 0.75 is the most conservative short threshold
+                         # the search actually tested.
+Z_ENTRY_LONG = 1.0       # Long VX1 when z <= -this (sigma). Slightly higher bar than
+                         # the short side: VIX is right-skewed, spiking up and
+                         # drifting down, so downside dislocations revert less
+                         # reliably than upside ones.
 Z_EXIT = 0.3             # Final exit threshold (sigma). Exiting slightly before the
                          # mean (0.3 rather than 0.0) scored better — the last leg of
                          # the reversion is the slowest and least reliable.
-Z_STOP = 2.0             # Stop-loss offset (sigma) from the entry z-score.
+Z_STOP = 2.5             # Stop-loss offset (sigma) from the entry z-score. The grid
+                         # preferred the widest stop it tested: a mean-reversion
+                         # entry is by construction already against the recent move,
+                         # so a tight stop mostly harvests noise before the reversion.
 MAX_HOLD_DAYS = 3        # Maximum holding period. Short holds dominated the grid:
                          # the edge is a fast reversion, and carrying past ~3 days
                          # mostly adds variance.
