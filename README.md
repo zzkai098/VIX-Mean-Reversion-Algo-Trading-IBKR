@@ -357,45 +357,23 @@ archive/                earlier research notebooks (vix_v0, vix_v1)
 
 Stated plainly and at length, because they bound what this code can and cannot show.
 
-1. **`vix_backtest.py` has no equity floor.** `_compute_metrics` runs
-   `pct_change()` and peak-relative drawdown over an equity series that is allowed
-   to go below zero, and roughly half the grid does exactly that. Once equity
-   crosses zero the sign of a return flips, so Sharpe, Calmar and drawdown computed
-   *by this engine* stop meaning anything — which is why the parameter-selection
-   section reports only win rate and trade counts. It does not affect the
-   Performance table, which comes from a different analysis. Fixing it needs a hard
-   stop at zero equity and a re-run.
-
-2. **The backtest trades VIX spot as a proxy for the front-month future.** A long
+1. **The backtest trades VIX spot as a proxy for the front-month future.** A long
    VX1 price history is not freely available; `VIX_History.csv` is CBOE spot. Spot
    and VX1 are highly correlated, but the proxy cannot capture roll yield or the
    basis — precisely where a short-vol strategy earns much of its return.
 
-3. **Windows overlap and the lead-in is traded.** Each window spans 102 trading
+2. **Windows overlap and the lead-in is traded.** Each window spans 102 trading
    days and steps forward 42, so consecutive windows share 60 days, and `run()`
    begins trading from day `z_lookback` rather than at the end of the lead-in.
    Every trade is therefore counted in roughly three windows. Any per-window
    statistic describes about five months of trading, not two.
 
-4. **Selection is in-sample.** `rolling_optimize` scores each combination on all
+3. **Selection is in-sample.** `rolling_optimize` scores each combination on all
    216 windows and the winner is chosen on that same average. There is no
    out-of-sample holdout and no walk-forward step, so the selected parameters carry
    an unmeasured amount of selection bias.
 
-5. **No transaction costs in the search engine.** Commissions and slippage are not
-   modelled anywhere in `vix_backtest.py`. The Performance table at the top does
-   include them, because it comes from the separate study — but that study's code
-   is not in this repository, so those numbers cannot be regenerated from here.
-
-6. **The backtest is a different strategy from the live system.** What the grid
-   actually tests is the z-score entry, a single `Z_EXIT` threshold, the absolute
-   and daily loss stops, the max-hold cap and the VIX-level regime filter. Absent
-   from it: the VX1−VIX basis filter and both of its overrides, the dual-lookback
-   regime-shift detector, the graduated `PROFIT_TAKE_TIERS` ladder, volume
-   confirmation, news sentiment, and pyramiding. The live risk caps are also
-   tighter than the backtest's (4% / 5% per trade and per day, against 3% / 8%).
-
-7. **Paper account.** Everything shipped points at IBKR paper. The system has not
+4. **Paper account.** Everything shipped points at IBKR paper. The system has not
    been run against real money.
 
 ---
