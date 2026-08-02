@@ -5,15 +5,21 @@ execution system on the Interactive Brokers API.
 
 The strategy trades front-month VIX futures around a rolling z-score of VIX spot,
 with three gating filters — term structure, regime shift, and geopolitical news
-sentiment — and a six-layer exit stack. Parameters are chosen by a walk-forward
-grid search over **4,374 parameter sets × 216 rolling 2-month windows** of VIX
-history (1990–2026). The live system runs unattended: it resolves the front-month
-contract, evaluates a signal each afternoon, monitors risk every minute, and
+sentiment — and a six-layer exit stack. Signal parameters were chosen with a
+rolling-window grid search over **2,916 distinct parameter sets** of VIX history.
+The live system runs unattended: it resolves the front-month contract, evaluates a
+signal on a daily schedule, re-checks risk and entry conditions every minute, and
 survives a restart without losing its position state.
 
 > **Scope.** This is research and paper-trading infrastructure, not investment
 > advice and not a live money-management system. Defaults point at an IBKR **paper**
-> account. Read [Limitations](#limitations) before doing anything else with it.
+> account.
+>
+> **The backtest in this repository is exploratory and has material defects** — it
+> has no equity floor, no transaction costs, overlapping windows and no
+> out-of-sample holdout. No performance figures are quoted anywhere in this README,
+> because the engine as written cannot support them. Read
+> [Limitations](#limitations) before drawing any conclusion from the code.
 
 ---
 
@@ -35,31 +41,30 @@ survives a restart without losing its position state.
 
 The thresholds are **asymmetric**, and deliberately so. VIX is right-skewed: it
 spikes upward and drifts downward, so upside dislocations revert more reliably than
-downside ones and earn a slightly lower bar.
-
-The grid's outright winner used an even lower short threshold (0.3), trading ~15%
-more often for about 0.02 more Sharpe. The shipped default takes the most
-conservative short threshold the search tested instead: short-vol collects small
-premiums and loses in large jumps, so marginal short entries carry more tail risk
-than an average-Sharpe score prices in.
+downside ones and earn a slightly lower bar. 0.75 is also the most conservative
+short threshold the grid search covered — short volatility collects small premiums
+and loses in large jumps, so a marginal short entry carries more tail risk than an
+averaged score reflects.
 
 **Filter A — term structure (VX1 − VIX basis).**
 Deep contango favours short-VIX (roll yield is a tailwind); backwardation
 suppresses short-VIX and permits long-VIX. Two overrides let an extreme z-score
 outrank the term structure: `Z_BASIS_OVERRIDE` (short into backwardation) and
-`Z_CONTANGO_OVERRIDE` (long into contango).
+`Z_CONTANGO_OVERRIDE` (long into contango). Live only — the backtest has no VX1
+series, so this filter is untested.
 
 **Filter B — regime shift (dual lookback).**
 Compare a fast z-score against a slow 30-day one. A large divergence means the
 distribution itself is moving, so reverting toward a stale mean is the wrong
-trade — new entries and pyramid adds are blocked while the flag is up.
+trade — new entries and pyramid adds are blocked while the flag is up. Live only.
 
 **Filter C — news sentiment (GDELT + VADER).**
-`vix_news.py` polls GDELT 2.0 for a configurable geopolitical keyword set, scores
-each item with VADER, and blocks mean-reversion entries when aggregate sentiment
-crosses a threshold. Thresholds are asymmetric — fear gates a short faster than
-relief gates a long. The point is to avoid the classic short-vol failure: selling
-volatility into a genuine regime change rather than into noise.
+`vix_news.py` polls the GDELT 2.0 document API for a configurable geopolitical
+keyword set, scores each article with VADER, and blocks mean-reversion entries when
+aggregate sentiment crosses a threshold. Thresholds are asymmetric — fear gates a
+short faster than relief gates a long. The point is to avoid the classic short-vol
+failure: selling volatility into a genuine regime change rather than into noise.
+Live only; GDELT 2.0 begins in 2015 and cannot be evaluated over the backtest window.
 
 **Exits — six layers.** Graduated profit-taking as the z-score decays, a z-score
 stop, an absolute dollar stop, a maximum holding period, a daily loss cap, and a
@@ -72,96 +77,128 @@ regime-triggered forced exit.
 
 ## Parameter selection
 
-`vix_backtest.py` is a **parameter-search engine**: it scores a grid of signal
-parameters across rolling windows and reports which settings hold up over time.
-It is not a full performance-attribution backtest — see [Limitations](#limitations).
+`vix_backtest.py` is a **parameter-search engine**, not a performance backtest. It
+scores a grid of signal parameters across rolling windows so the settings can be
+compared against one another. It is not a P&L simulation, and the sections below
+quote no returns — see [Limitations](#limitations) for why.
 
-The search covers `3 × 3 × 3 × 3 × 3 × 3 × 3 × 2 = 4,374` parameter sets, each run
-across **216 rolling 2-month windows** spanning January 1990 to March 2026 —
-about 945,000 individual window backtests.
+The grid is `3 × 3 × 3 × 3 × 3 × 3 × 3 × 2 = 4,374` rows, but `slope_lookback` is
+unreachable when `slope_confirmation` is `False`, so those rows are exact
+triplicates: **2,916 distinct parameter sets**. Each was scored across **216
+overlapping 102-day windows** — a 42-day step with a 60-day lead-in — spanning
+CBOE VIX spot from 1990-01-02 to 2026-03-20.
 
-### Every parameter set is a return/drawdown trade-off
+Only two statistics are reported here: **trade win rate** and **trades per
+window**. Both are computed from realised trade P&L signs and counts, so neither
+depends on the account equity path — unlike Sharpe, Calmar and drawdown, which the
+engine cannot compute meaningfully (Limitation 3).
 
-![risk vs return across the grid](docs/img/risk_return_cloud.png)
+### One boolean splits the entire search
 
-### Parameter sensitivity
+![win rate split by the slope filter](docs/img/slope_filter_split.png)
 
-A longer z-score lookback with a faster exit scores best on Sharpe. The edge is a
-quick reversion; holding longer mostly adds variance.
+`slope_confirmation` dominates every numeric parameter combined. Requiring the
+short-horizon VIX slope to agree with the reversion direction raises selectivity
+sharply but suppresses most entries; the shipped configuration leaves it off.
 
-![parameter sensitivity](docs/img/param_sensitivity.png)
+### Selectivity costs frequency
 
-### The objective function matters more than the winner
+![win rate versus trade frequency](docs/img/winrate_vs_frequency.png)
 
-Ranking the same grid by average return instead of by Sharpe picks a set that earns
-roughly 30% more per window — and roughly doubles the worst-window drawdown. The
-shipped configuration is the **Sharpe-ranked** winner for that reason.
+The two clusters are the same trade-off seen from the other side: filters that lift
+win rate do so by refusing trades. There is no corner of this grid that gets both.
 
-![objective trade-off](docs/img/objective_tradeoff.png)
+### Sensitivity to the two structural parameters
 
-### The result is a broad plateau, not a lucky point
+![win rate by lookback and holding period](docs/img/winrate_sensitivity.png)
 
-![distribution of Sharpe across the grid](docs/img/sharpe_distribution.png)
+Within the shipped regime, win rate rises with the z-score lookback and falls
+slightly as the holding period lengthens. The best cell — a 20-day lookback with a
+3-day maximum hold, at 56.7% — is the shipped configuration.
 
-Most of the grid clusters in a similar band, which is the reassuring outcome: the
-selected parameters sit on a plateau rather than a spike, so performance is not an
-artefact of one fragile combination.
+Regenerate all three with `python make_figures.py grid_results.csv`.
 
 ### Selected parameters
 
 | Parameter | Value | Why |
 |---|---|---|
-| `Z_LOOKBACK` | 20 | Beat 10d/15d on Sharpe — a slower baseline treats a spike as an outlier instead of re-centring on it |
-| `Z_ENTRY_SHORT` | 0.75 | The most conservative short threshold tested. The outright winner (0.3) trades ~15% more for ~0.02 more Sharpe — not a trade worth making when the tail is one-sided |
+| `Z_LOOKBACK` | 20 | Highest win rate of the three lookbacks tested, at every holding period |
+| `Z_ENTRY_SHORT` | 0.75 | Most conservative short threshold in the grid; short-vol tail risk is one-sided |
 | `Z_ENTRY_LONG` | 1.0 | Higher bar for longs; VIX's right skew makes downside dislocations less reliable |
-| `Z_EXIT` | 0.3 | Exiting just before the mean beat exiting at it — the last leg of a reversion is the slowest |
+| `Z_EXIT` | 0.3 | **Backtest only** — the live system exits through `PROFIT_TAKE_TIERS` and never reads this |
 | `Z_STOP` | 2.5 | The widest stop tested. A mean-reversion entry is already against the recent move, so a tight stop mostly harvests noise before the reversion arrives |
-| `MAX_HOLD_DAYS` | 3 | Short holds dominated the grid |
-| `SLOPE_CONFIRMATION` | False | Requiring slope agreement suppressed too many entries |
+| `MAX_HOLD_DAYS` | 3 | Best win rate at a 20-day lookback, and the fastest turnover of the three |
+| `SLOPE_CONFIRMATION` | False | On, it suppresses most entries — see the first figure |
 
-Re-run the search yourself with `python vix_backtest.py`.
+⚠️ **Re-running `python vix_backtest.py` will not reproduce the grid above.** The
+committed `main()` slices the data to `2020-01-01` onward and uses a 21-day window,
+producing 72 windows rather than 216, and ranks by average return rather than by
+any risk-adjusted measure ("Competition Mode"). The 216-window configuration used
+for `grid_results.csv` was a one-off edit that is not in this repository.
 
 ---
 
 ## Limitations
 
-Stated plainly, because they bound what the numbers above mean.
+Stated plainly and at length, because they bound what this code can and cannot show.
 
-1. **The backtest trades VIX spot as a proxy for the front-month future.** A long
+1. **No equity floor — this is the important one.** `_compute_metrics` runs
+   `pct_change()` and peak-relative drawdown over an equity series that is allowed
+   to go below zero, and roughly half the grid does exactly that. Once equity
+   crosses zero the sign of a return flips, so Sharpe, Calmar and maximum drawdown
+   stop meaning anything. **No ratio metric from this engine should be quoted**,
+   which is why none appear above. Fixing this needs a hard stop at zero equity and
+   a re-run.
+
+2. **The backtest trades VIX spot as a proxy for the front-month future.** A long
    VX1 price history is not freely available; `VIX_History.csv` is CBOE spot. Spot
-   and VX1 are highly correlated, but the proxy **cannot capture roll yield or the
-   basis** — which is precisely where a short-vol strategy earns much of its return.
-   Treat grid results as a signal-quality comparison across parameters, not as a
-   P&L forecast.
-2. **Three live components are not in the backtest.** The news filter, the
-   regime-shift detector, and pyramiding are live-only. GDELT 2.0 begins in 2015,
-   so the news filter *cannot* be evaluated over a 1990-start window at all.
-3. **No margin or liquidation model.** The engine lets a position keep losing past
-   the point a broker would liquidate, which is why the deepest window drawdowns in
-   the grid are implausibly large. The live configuration therefore sizes below the
-   backtest (15 contracts vs 20) and adds a daily loss cap the backtest ignores.
-4. **No transaction costs in this engine.** Commissions and slippage are not
-   modelled in `vix_backtest.py`. A separate course performance study evaluated the
-   strategy with an IBKR commission schedule, per-leg slippage and an SPY benchmark;
-   that analysis is not part of this repository, so its figures are not quoted here.
-5. **Paper account.** Everything shipped points at IBKR paper. The system has not
+   and VX1 are highly correlated, but the proxy cannot capture roll yield or the
+   basis — precisely where a short-vol strategy earns much of its return.
+
+3. **Windows overlap and the lead-in is traded.** Each window spans 102 trading
+   days and steps forward 42, so consecutive windows share 60 days, and `run()`
+   begins trading from day `z_lookback` rather than at the end of the lead-in.
+   Every trade is therefore counted in roughly three windows. Any per-window
+   statistic describes about five months of trading, not two.
+
+4. **Selection is in-sample.** `rolling_optimize` scores each combination on all
+   216 windows and the winner is chosen on that same average. There is no
+   out-of-sample holdout and no walk-forward step, so the selected parameters carry
+   an unmeasured amount of selection bias.
+
+5. **No transaction costs.** Commissions and slippage are not modelled anywhere in
+   `vix_backtest.py`. A separate course performance study evaluated the strategy
+   with an IBKR commission schedule, per-leg slippage and an SPY benchmark; that
+   analysis is not part of this repository, so its figures are not quoted here.
+
+6. **The backtest is a different strategy from the live system.** What the grid
+   actually tests is the z-score entry, a single `Z_EXIT` threshold, the absolute
+   and daily loss stops, the max-hold cap and the VIX-level regime filter. Absent
+   from it: the VX1−VIX basis filter and both of its overrides, the dual-lookback
+   regime-shift detector, the graduated `PROFIT_TAKE_TIERS` ladder, volume
+   confirmation, news sentiment, and pyramiding. The live risk caps are also
+   tighter than the backtest's (4% / 5% per trade and per day, against 3% / 8%).
+
+7. **Paper account.** Everything shipped points at IBKR paper. The system has not
    been run against real money.
 
 ---
 
 ## Live system
 
-`vix_strategy.py` is built from seven components, each with one job:
+`vix_strategy.py` is built from seven components plus a terminal chart, each with
+one job:
 
 | Component | Responsibility |
 |---|---|
 | `VIXContractManager` | Resolves the VIX futures contract, auto-selecting the front month |
 | `VIXDataEngine` | Dual market-data sources (yfinance + IBKR) with local persistence |
-| `VIXSignalEngine` | Rolling z-score, asymmetric long/short entry thresholds, regime-shift detection |
+| `VIXSignalEngine` | Rolling z-score, asymmetric long/short thresholds, regime-shift detection |
 | `VIXRiskManager` | The six-layer exit stack |
 | `PositionTracker` | Position state persistence and pyramid bookkeeping |
-| `VIXStrategyEngine` | Orchestrates the daily signal → risk → execution workflow |
+| `VIXStrategyEngine` | Orchestrates the signal → risk → execution workflow |
 | `VIXAutomationBot` | Scheduled signal checks plus minute-level risk monitoring |
+| `LiveTerminalChart` | Draws the running z-score and position in the terminal (`plotext`) |
 
 Two design choices worth calling out:
 
@@ -169,6 +206,10 @@ Two design choices worth calling out:
   hiccup does not silently freeze the signal.
 - **State on disk.** Position state is written to JSON after every change, so a
   crash or restart resumes with the correct position rather than a blank slate.
+
+**Timing.** `DAILY_SIGNAL_TIME` schedules the main daily evaluation, but the
+minute-level risk loop also opens new positions when the book is flat and the
+session is open — so entries are not confined to the afternoon check.
 
 ---
 
@@ -186,15 +227,18 @@ python -c "import nltk; nltk.download('vader_lexicon')"
 enable the API (TWS → Settings → API → *Enable ActiveX and Socket Clients*).
 Paper ports are `7497` for TWS and `4002` for Gateway.
 
-**3. Point the config at your account.** Set `IB_ACCOUNT` in `vix_config.py` to
-your own paper account id; the shipped `DUP323189` is not yours.
+**3. Set your account.** Put your own paper account id in `IB_ACCOUNT`
+(`vix_config.py`). The bot refuses to start if that account is not among the ones
+your TWS session manages — a guard against connecting to a session that also holds
+a live account.
 
 **4. Run.**
 
 ```bash
-python vix_main.py          # live loop: daily signal + minute-level risk checks
-python vix_backtest.py      # re-run the parameter grid search
-python vix_fetch_history.py # refresh the stitched VIX futures history
+python vix_main.py                        # live loop: daily signal + minute risk checks
+python vix_backtest.py                    # parameter grid search (see the warning above)
+python make_figures.py grid_results.csv   # regenerate docs/img from a results CSV
+python vix_fetch_history.py               # refresh the stitched VIX futures history
 ```
 
 `REQUIRE_APPROVAL = True` ships as the default: every order is printed and waits
@@ -205,17 +249,18 @@ trust the configuration.
 
 ## Configuration
 
-All tunables live in `vix_config.py`, grouped and annotated by origin — every block
-states whether its values were **grid-selected** or are **live controls the backtest
-does not simulate**. The ones you are most likely to touch:
+Live tunables live in `vix_config.py`, grouped and annotated by origin — every block
+states whether its values were grid-selected, are live-only controls, or are read by
+the backtest alone. **`vix_backtest.py` does not import this file**: its grid and
+defaults are hardcoded, so editing `vix_config.py` has no effect on a grid search.
 
 | Block | Keys |
 |---|---|
-| Signal | `Z_LOOKBACK`, `Z_ENTRY_SHORT`, `Z_ENTRY_LONG`, `Z_EXIT`, `Z_STOP`, `MAX_HOLD_DAYS` |
+| Signal | `Z_LOOKBACK`, `Z_ENTRY_SHORT`, `Z_ENTRY_LONG`, `Z_STOP`, `MAX_HOLD_DAYS` |
 | Risk | `MAX_LOSS_PCT`, `DAILY_MAX_LOSS_PCT`, `PROFIT_TAKE_TIERS` |
 | Sizing | `MAX_CONTRACTS`, `POSITION_SIZE_TIERS`, `PYRAMID_ENABLED` |
 | News | `NEWS_SENTIMENT_ENABLED`, `NEWS_KEYWORDS`, `NEWS_*_THRESHOLD_*` |
-| IBKR | `IB_ACCOUNT`, `IB_PORT`, `IB_CLIENT_ID` |
+| IBKR | `IB_ACCOUNT`, `IB_PORT` |
 | Schedule | `DAILY_SIGNAL_TIME`, `RISK_INTERVAL_MINUTES` |
 
 `NEWS_KEYWORDS` ships with an example set from the period this was run. The filter
@@ -228,15 +273,18 @@ driving volatility.
 
 ```
 vix_main.py             entry point: IBKR connection + strategy engine + automation bot
-vix_strategy.py         core engine (the seven components above)
+vix_strategy.py         core engine (the components above)
 vix_ibkr.py             IBKR API wrapper: connection, market data, orders, P&L
-vix_news.py             GDELT fetch + VADER sentiment scoring
-vix_backtest.py         walk-forward parameter grid search
-vix_fetch_history.py    stitched front-month VIX futures history
-vix_config.py           all tunable parameters, annotated by origin
-VIX_History.csv         CBOE VIX spot, 1990-2026 — the backtest input
-vix_futures_history.csv recent stitched VX1/VX2 history, used for the live basis
-vix_spot_history.csv    recent VIX spot cache (yfinance)
+vix_news.py             GDELT 2.0 fetch + VADER sentiment scoring
+vix_backtest.py         parameter grid search (self-contained; ignores vix_config.py)
+make_figures.py         regenerates docs/img from a grid-search results CSV
+vix_fetch_history.py    downloads and stitches front-month VIX futures history
+vix_config.py           live tunables, annotated by origin
+VIX_History.csv         CBOE VIX spot, 1990-2026 — the grid-search input
+grid_results.csv        grid-search output behind the figures above
+vix_futures_history.csv stitched VX1/VX2 history produced by vix_fetch_history.py
+                        (reference data — no runtime code reads it)
+vix_spot_history.csv    VIX spot cache written by the live data engine
 docs/img/               figures used in this README
 archive/                earlier research notebooks (vix_v0, vix_v1)
 ```

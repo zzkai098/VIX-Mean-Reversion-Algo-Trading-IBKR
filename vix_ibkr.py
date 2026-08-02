@@ -20,8 +20,7 @@ class IBKR(object):
     """Thin wrapper around `ib_async.IB` holding one connection and its account.
 
     Construct, then `connect(client_id)` before any other call — the account id is
-    resolved on connect and cached. `_active_pnls` tracks live P&L subscriptions so
-    they can be reused rather than re-requested per poll.
+    resolved on connect and cached.
     """
 
     def __init__(self):
@@ -147,8 +146,8 @@ class IBKR(object):
         Monitors Profit & Loss (PnL) for a specific account.
         
         Args:
-            account (str): Account ID (e.g., 'DUP173994').
-            duration (int): How long to monitor in seconds.
+            account: Account id. Defaults to the account resolved on connect.
+            duration: How long to monitor, in seconds; 0 monitors indefinitely.
         """
         account = account or self.account
 
@@ -194,11 +193,40 @@ class IBKR(object):
         self.ib.placeOrder(contract, order)
                                     
     def _set_account(self) -> None:
+        """Resolve which account this session trades, preferring IB_ACCOUNT.
+
+        A TWS login can manage several accounts — commonly a paper and a live one.
+        Silently taking `managedAccounts()[0]` means the account traded depends on
+        the order TWS happens to return, so an unattended bot could place orders
+        against a live account. If IB_ACCOUNT is set it must be one of the managed
+        accounts, and we refuse to continue otherwise rather than guess.
+        """
         accounts = self.ib.managedAccounts()
-        if accounts:
-            self.account = accounts[0] 
+        if not accounts:
+            raise RuntimeError(
+                "IBKR returned no managed accounts — check that TWS/Gateway is "
+                "logged in and the API is enabled."
+            )
+
+        wanted = (IB_ACCOUNT or "").strip()
+        if wanted:
+            if wanted not in accounts:
+                raise RuntimeError(
+                    f"IB_ACCOUNT={wanted!r} is not managed by this TWS session "
+                    f"(available: {', '.join(accounts)}). Refusing to trade a "
+                    f"different account than the one configured."
+                )
+            self.account = wanted
         else:
-            self.account = None
+            if len(accounts) > 1:
+                raise RuntimeError(
+                    f"This session manages {len(accounts)} accounts "
+                    f"({', '.join(accounts)}) and IB_ACCOUNT is empty. Set "
+                    f"IB_ACCOUNT in vix_config.py to choose one explicitly."
+                )
+            self.account = accounts[0]
+
+        print(f"[IBKR] trading account: {self.account}")
  
 
 class Visualizer(object):
@@ -278,18 +306,13 @@ class Visualizer(object):
             print("\nMonitor stopped by user.")
           
 if __name__ == "__main__":
+    # Connection smoke test: confirms TWS is reachable, the API is enabled and
+    # IB_ACCOUNT resolves, without placing an order or touching the strategy.
     ib = IBKR()
     ib.connect(np.random.randint(10000, 999999), isTWS=True)
-    print("Available Cash:", ib.get_available_cash())
-    print("Positions:", ib.get_positions())
-    print("Net Liquidation:", ib.get_net_liquidation(), '\n')
-    print("Historical Prices for AAPL:\n", ib.get_historical_prices(ib.get_contract_stock("AAPL")).tail())
-    print("Current Price for AAPL:", ib.get_current_price(ib.get_contract_stock("AAPL")))
-    
-    #pnl
-    pnl = ib.get_pnl(ib.account)
-    visualizer = Visualizer()
-    visualizer.monitor_pnl(pnl, duration=10)
-    
+    print("Account:         ", ib.account)
+    print("Available cash:  ", ib.get_available_cash())
+    print("Net liquidation: ", ib.get_net_liquidation())
+    print("Positions:       ", ib.get_positions())
     ib.disconnect()
     

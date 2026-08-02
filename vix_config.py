@@ -13,10 +13,10 @@
 # =============================================================================
 
 # ========= Signal parameters — GRID-SELECTED =================================
-# This is a real row of the grid, not a hand-mixed set: rank 1 by average Sharpe
-# among all combinations using the most conservative short threshold the search
-# tested (0.75). Its metrics over the 216 windows: Sharpe 2.02, +18.96% average
-# 2-month return, 82.9% of windows profitable, 58.0% trade win rate.
+# A real row of the grid, not a hand-mixed set. Selected on trade win rate and
+# turnover, the only statistics the search engine computes reliably: it has no
+# equity floor, so Sharpe and drawdown are not usable (see README Limitations).
+# This row wins its lookback/hold cell at 56.7% average trade win rate.
 Z_LOOKBACK = 20          # Rolling window for the VIX-spot z-score (trading days).
                          # 20d beat 10d/15d on Sharpe: a slower baseline treats a
                          # volatility spike as a genuine outlier instead of quickly
@@ -32,9 +32,10 @@ Z_ENTRY_LONG = 1.0       # Long VX1 when z <= -this (sigma). Slightly higher bar
                          # the short side: VIX is right-skewed, spiking up and
                          # drifting down, so downside dislocations revert less
                          # reliably than upside ones.
-Z_EXIT = 0.3             # Final exit threshold (sigma). Exiting slightly before the
-                         # mean (0.3 rather than 0.0) scored better — the last leg of
-                         # the reversion is the slowest and least reliable.
+Z_EXIT = 0.3             # BACKTEST ONLY. vix_backtest.py exits on this threshold;
+                         # the live VIXRiskManager stores it and never reads it,
+                         # exiting through PROFIT_TAKE_TIERS instead. Changing this
+                         # will not alter live behaviour.
 Z_STOP = 2.5             # Stop-loss offset (sigma) from the entry z-score. The grid
                          # preferred the widest stop it tested: a mean-reversion
                          # entry is by construction already against the recent move,
@@ -61,8 +62,8 @@ SLOPE_CONFIRMATION = False   # Grid-selected: requiring slope agreement suppress
 Z_BASIS_OVERRIDE = 1.8       # z above this ignores backwardation and allows a short:
                              # at ~2 sigma the reversion signal is strong enough to
                              # act on even when the term structure is unhelpful.
-                             # Rounded from a hand-tuned 1.82; the extra digit implied
-                             # precision the data does not support. Not grid-searched.
+                             # Hand-set, not grid-searched — the backtest has no VX1
+                             # series, so no basis rule in this file is tested.
 Z_CONTANGO_OVERRIDE = -1.4   # z below this ignores contango and allows a long.
 Z_STOP_OVERRIDE = 1.5        # Tighter stop for override entries, which trade against
                              # the term structure and so deserve less rope.
@@ -70,16 +71,16 @@ VOLUME_LOOKBACK = 20         # Rolling window for average volume.
 VOLUME_MULTIPLIER = 1.0      # Entry requires volume >= multiplier x rolling average.
 VOLUME_CONFIRMATION = True   # Skip entries on thin tape.
 
-# ========= Regime filter — live only, not in the backtest ====================
+# ========= Regime filter — implemented in BOTH the live system and backtest ==
 VIX_REGIME_THRESHOLD = 35         # VIX >= 35 blocks new LONG entries (shorts stay
                                   # allowed: elevated VIX is where short-vol pays).
 VIX_REGIME_REDUCE_THRESHOLD = 30  # VIX 30-35 halves new long exposure.
 REGIME_REDUCE_FACTOR = 0.5
 
-# ========= Risk limits — live controls, not simulated ========================
-# The backtest sizes positions with no margin or liquidation model, so its
-# worst-window drawdowns are unrealistically deep. These caps are the live
-# safeguards that stop a losing window from compounding.
+# ========= Risk limits — in both systems, but tighter here ===================
+# vix_backtest.py implements both of these caps, at looser values (3% and 8%).
+# The live settings below are deliberately tighter, because the backtest has no
+# margin or liquidation model and so understates how a bad run actually ends.
 MAX_LOSS_PCT = 0.04          # Max unrealised loss per trade, as a fraction of account.
 DAILY_MAX_LOSS_PCT = 0.05    # Cumulative daily loss cap; trading halts if breached.
 
@@ -97,7 +98,10 @@ POSITION_SIZE_TIERS = [
     (1.0, 6),
     (0.75, 4),   # minimum entry size
 ]
-CAPITAL_ALLOCATION_PCT = 0.5  # Share of the account allocated to this strategy.
+CAPITAL_ALLOCATION_PCT = 0.5  # Declared share of the account for this strategy.
+                              # Currently informational: sizing is driven by
+                              # POSITION_SIZE_TIERS and MAX_CONTRACTS, and no code
+                              # reads this value.
 
 # ========= Market data =======================================================
 SPREAD_HISTORY_DAYS = 120  # Days of VIX history kept in memory for the z-score.
@@ -124,7 +128,8 @@ VERBOSE = True
 IB_ACCOUNT = "DUP323189"   # "DU" prefix = IBKR paper account.
 IB_HOST = "127.0.0.1"
 IB_PORT = 7497             # TWS paper: 7497 | Gateway paper: 4002
-IB_CLIENT_ID = 20
+IB_CLIENT_ID = 20          # Unused: every entry point generates a random client id
+                           # so two processes cannot collide on one TWS session.
 BASE_CURRENCY = "USD"
 EXCHANGE = "SMART"
 
@@ -157,7 +162,13 @@ REGIME_SHIFT_DIVERGENCE    = 1.0    # |z_slow - z_fast| above this flags a regim
 REGIME_SHIFT_BLOCK_ENTRY   = True
 REGIME_SHIFT_BLOCK_PYRAMID = True
 
-# ========= Pyramiding — live only ============================================
+# ========= Pyramiding — live only, and the least validated mechanism here ====
+# Not modelled in the backtest at all. Combined with a risk loop that runs every
+# minute, these settings let a position scale from the 4-contract minimum to the
+# 15-contract cap within about 1.5 hours. Treat them as aggressive defaults and
+# tighten PYRAMID_COOLDOWN_HOURS / PYRAMID_MAX_ADDS before running unattended.
+# Note also that add_to_position() re-bases the PROFIT_TAKE_TIERS ladder onto the
+# new total, so "% of the original position" resets after every add.
 PYRAMID_ENABLED        = True
 PYRAMID_MAX_ADDS       = 3      # Adds allowed on top of the initial entry.
 PYRAMID_MIN_Z_GAP      = 0.25   # Required further z-score extension between adds.

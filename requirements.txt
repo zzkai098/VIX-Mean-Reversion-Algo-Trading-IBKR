@@ -1,9 +1,9 @@
 ib_async
 pandas
 numpy
+matplotlib
 yfinance
 nltk
 schedule
 pytz
 plotext
-requests
